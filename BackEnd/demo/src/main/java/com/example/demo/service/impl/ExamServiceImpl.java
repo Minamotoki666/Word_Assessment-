@@ -1,5 +1,6 @@
 package com.example.demo.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.demo.entity.AnswerDetail;
 import com.example.demo.entity.ExamInfo;
 import com.example.demo.entity.ExamRecord;
@@ -9,10 +10,7 @@ import com.example.demo.mapper.ExamInfoMapper;
 import com.example.demo.mapper.ExamRecordMapper;
 import com.example.demo.mapper.WordDictMapper;
 import com.example.demo.service.ExamService;
-import com.example.demo.vo.ExamPaperVO;
-import com.example.demo.vo.ExamResultVO;
-import com.example.demo.vo.QuestionVO;
-import com.example.demo.vo.SubmitExamDTO;
+import com.example.demo.vo.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +34,34 @@ public class ExamServiceImpl implements ExamService {
     @Autowired
     private AnswerDetailMapper answerDetailMapper;
 
+
+    @Override
+    public List<WordCloudVO> getWeeklyWordCloud(String studentId) {
+        return answerDetailMapper.selectWeeklyErrorWordCloud(studentId);
+    }
+
+    @Override
+    public List<ExamRecordExportVO> getExportRecordList(Long examId) {
+        // 构建条件：查询特定考场的所有成绩...
+        LambdaQueryWrapper<ExamRecord> wrapper = new LambdaQueryWrapper<>();
+        if (examId != null) {
+            wrapper.eq(ExamRecord::getExamId, examId);
+        }
+        wrapper.orderByDesc(ExamRecord::getSubmitTime);
+
+        List<ExamRecord> records = examRecordMapper.selectList(wrapper);
+
+        return records.stream().map(record -> {
+            ExamRecordExportVO vo = new ExamRecordExportVO();
+            vo.setId(record.getId());
+            vo.setExamId(record.getExamId());
+            vo.setStudentId(record.getStudentId());
+            vo.setStudentName(record.getStudentName());
+            vo.setScore(record.getScore());
+            vo.setSubmitTime(record.getSubmitTime());
+            return vo;
+        }).collect(Collectors.toList());
+    }
     @Override
     public ExamResultVO submitExam(SubmitExamDTO submitDTO) {
         // 1. 校验考试时间是否超出
