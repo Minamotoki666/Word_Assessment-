@@ -1,13 +1,18 @@
 package com.example.demo.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.demo.entity.AnswerDetail;
 import com.example.demo.entity.ExamInfo;
+import com.example.demo.entity.ExamRecord;
 import com.example.demo.entity.WordDict;
+import com.example.demo.mapper.AnswerDetailMapper;
 import com.example.demo.mapper.ExamInfoMapper;
+import com.example.demo.mapper.ExamRecordMapper;
 import com.example.demo.mapper.WordDictMapper;
 import com.example.demo.service.ExamService;
 import com.example.demo.vo.ExamPaperVO;
+import com.example.demo.vo.ExamResultVO;
 import com.example.demo.vo.QuestionVO;
+import com.example.demo.vo.SubmitExamDTO;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -25,6 +30,81 @@ public class ExamServiceImpl implements ExamService {
     @Autowired
     private WordDictMapper wordDictMapper;
 
+    @Autowired
+    private ExamRecordMapper examRecordMapper;
+
+    @Autowired
+    private AnswerDetailMapper answerDetailMapper;
+
+    @Override
+    public ExamResultVO submitExam(SubmitExamDTO submitDTO) {
+        // 1. 校验考试时间是否超出
+        ExamInfo examInfo = examInfoMapper.selectById(submitDTO.getExamId());
+        if (examInfo == null) {
+            throw new RuntimeException("考试不存在！");
+        }
+        if (LocalDateTime.now().isAfter(examInfo.getEndTime().plusMinutes(2))) {
+            // 给网络延迟预留2分钟宽限期
+            throw new RuntimeException("考试已经超时结束，无法交卷！");
+        }
+
+        // 2. 批量查出本次试卷所有单词的正确答案
+        List<Long> wordIds = submitDTO.getAnswers().stream()
+                .map(SubmitExamDTO.AnswerItem::getWordId)
+                .collect(Collectors.toList());
+        List<WordDict> wordDicts = wordDictMapper.selectBatchIds(wordIds);
+
+        // 转换成 Map<wordId, WordDict> 方便快速对答案
+        Map<Long, WordDict> dictMap = wordDicts.stream()
+                .collect(Collectors.toMap(WordDict::getId, w -> w));
+
+        // 3. 先保存考生成绩主记录（为了先拿到数据库自增ID，我们暂时填0分，稍后更新）
+        ExamRecord record = new ExamRecord();
+        record.setExamId(submitDTO.getExamId());
+        record.setStudentId(submitDTO.getStudentId());
+        record.setStudentName(submitDTO.getStudentName());
+        record.setScore(0);
+        record.setSubmitTime(LocalDateTime.now());
+        examRecordMapper.insert(record);
+
+        // 4. 自动逐题判卷，并写入字符云关键的 answer_detail 表
+        int correctCount = 0;
+        for (SubmitExamDTO.AnswerItem item : submitDTO.getAnswers()) {
+            WordDict correctWord = dictMap.get(item.getWordId());
+            boolean isCorrect = false;
+
+            if (correctWord != null && correctWord.getMeaningCn().equals(item.getSelectedAnswer())) {
+                isCorrect = true;
+                correctCount++;
+            }
+
+            // 往明细表插一条数据 (统计用)
+            AnswerDetail detail = new AnswerDetail();
+            detail.setExamRecordId(record.getId());
+            detail.setStudentId(submitDTO.getStudentId());
+            detail.setWordId(item.getWordId());
+            if (correctWord != null) {
+                detail.setWordEn(correctWord.getWordEn());
+            } else {
+                detail.setWordEn("unknown");
+            }
+            detail.setIsCorrect(isCorrect);
+            detail.setCreateTime(LocalDateTime.now());
+            answerDetailMapper.insert(detail);
+        }
+
+        // 5. 计算最终得分（假设每道题算一分，或者换算为百分制，这里以纯计个数为例）
+        int totalScore = (int) Math.round((double) correctCount / submitDTO.getAnswers().size() * 100);
+        record.setScore(totalScore);
+        examRecordMapper.updateById(record);
+
+        // 6. 返回结果给前端
+        ExamResultVO resultVO = new ExamResultVO();
+        resultVO.setRecordId(record.getId());
+        resultVO.setScore(totalScore);
+        resultVO.setTotal(submitDTO.getAnswers().size());
+        return resultVO;
+    }
     @Override
     public Long createExam(String title, String startTime, String endTime, int questionCount) {
         // 1. 查询所有单词库的 ID
