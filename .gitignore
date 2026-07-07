@@ -27,3 +27,5 @@ replay_pid*
 .vs
 **/.vs/
 >>>>>>> 0ac69f7 (Initial commit)
+.idea/
+*.iml
